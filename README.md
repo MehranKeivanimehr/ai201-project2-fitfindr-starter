@@ -257,11 +257,3 @@ If a retry succeeds, a note appears in the listing panel explaining what was adj
 
 ---
 
-## Demo Video Outline
-
-A 3–5 minute demo should include:
-
-1. **Complete happy-path interaction:** Submit a query, show the three output panels, and narrate which tool produced each one.
-2. **State passing:** Explain that `search_listings` selected the item, `suggest_outfit` used that exact item, and `create_fit_card` used both the item and the outfit suggestion.
-3. **Triggered failure:** Submit the no-results query and show the agent's helpful error message, pointing out that the later tools were not called.
-4. **Empty wardrobe (optional):** Switch to "Empty wardrobe" and submit a query to show general styling advice.
