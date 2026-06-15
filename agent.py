@@ -18,6 +18,8 @@ Usage (once implemented):
     print(result["error"])   # None on success
 """
 
+import re
+
 from tools import search_listings, suggest_outfit, create_fit_card
 
 
@@ -92,9 +94,68 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     Before writing code, complete the Planning Loop and State Management sections
     of planning.md — your implementation should match what you described there.
     """
-    # TODO: implement the planning loop
     session = _new_session(query, wardrobe)
-    session["error"] = "Planning loop not yet implemented."
+
+    # Step 2: Parse the query
+    cleaned_query = query.strip()
+
+    # Extract max_price: "under $30", "under 30", "less than $40", "< $50"
+    max_price = None
+    price_match = re.search(
+        r"(?:under|less than|<)\s*\$?(\d+(?:\.\d+)?)", cleaned_query, re.IGNORECASE
+    )
+    if price_match:
+        max_price = float(price_match.group(1))
+        cleaned_query = cleaned_query[: price_match.start()] + cleaned_query[price_match.end() :]
+
+    # Extract size: "size M", "size S/M", "size W30 L30", "size US 8"
+    size = None
+    size_match = re.search(
+        r"size\s+(.+?)(?:,|\s+(?:under|less than|<)|$)", cleaned_query, re.IGNORECASE
+    )
+    if size_match:
+        size = size_match.group(1).strip()
+        cleaned_query = cleaned_query[: size_match.start()] + cleaned_query[size_match.end() :]
+
+    # Remaining text is the description
+    description = re.sub(r"\s+", " ", cleaned_query).strip(" ,")
+
+    session["parsed"] = {
+        "description": description,
+        "size": size,
+        "max_price": max_price,
+    }
+
+    # Step 3: Search listings
+    session["search_results"] = search_listings(
+        description=description,
+        size=size,
+        max_price=max_price,
+    )
+
+    if not session["search_results"]:
+        session["error"] = (
+            "I couldn't find anything matching that. Try broadening your search — "
+            "remove the size filter, increase the price limit, or use more general keywords."
+        )
+        return session
+
+    # Step 4: Select top result
+    session["selected_item"] = session["search_results"][0]
+
+    # Step 5: Suggest outfit
+    session["outfit_suggestion"] = suggest_outfit(
+        new_item=session["selected_item"],
+        wardrobe=session["wardrobe"],
+    )
+
+    # Step 6: Create fit card
+    session["fit_card"] = create_fit_card(
+        outfit=session["outfit_suggestion"],
+        new_item=session["selected_item"],
+    )
+
+    # Step 7: Return session
     return session
 
 
