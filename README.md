@@ -3,6 +3,11 @@
 FitFindr is a multi-tool AI agent that helps users find secondhand clothing and figure out how to style it with what they already own. Given a natural-language request like "vintage graphic tee under $30, size M," the agent searches a mock dataset of secondhand listings, picks the best match, suggests outfits using the user's wardrobe, generates a shareable fit card caption, and includes stretch features for price comparison, style memory, trend awareness, and search retry logic.
 
 ---
+## Demo Video
+
+[Watch the 5-minute project demo on Loom](https://www.loom.com/share/8deb5a770e56495d86c4e1ac29abb0b7)
+
+---
 
 ## What's Included
 
