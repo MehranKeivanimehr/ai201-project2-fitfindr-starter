@@ -1,19 +1,22 @@
 """
 tools.py
 
-The three required FitFindr tools. Each tool is a standalone function that
-can be called and tested independently before being wired into the agent loop.
-
-Complete and test each tool before moving to agent.py.
+The required FitFindr tools plus stretch-feature tools. Each function is a
+standalone tool that can be called and tested independently before being wired
+into the agent loop.
 
 Tools:
     search_listings(description, size, max_price)  → list[dict]
     suggest_outfit(new_item, wardrobe)              → str
     create_fit_card(outfit, new_item)               → str
+    compare_price(item)                              → str
+    check_trends(style, size)                        → str
 """
 
 import os
+from statistics import mean
 
+import requests
 from dotenv import load_dotenv
 from groq import Groq
 
@@ -276,3 +279,110 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
         return caption
     except Exception:
         return f"Found {item_name} on {item_platform} for ${item_price} — styled with the outfit above. ✨"
+
+
+# ── Stretch Tool 1: compare_price ─────────────────────────────────────────────
+
+def compare_price(item: dict) -> str:
+    """
+    Estimate whether an item's price is fair based on comparable listings.
+
+    Comparable listings are defined as items in the same category that share
+    at least one style tag or color with the target item. The function computes
+    the average, minimum, and maximum prices of those comparables and returns
+    a short verdict.
+
+    Args:
+        item: A listing dict with `category`, `style_tags`, `colors`, and `price`.
+
+    Returns:
+        A short string verdict such as "fair price", "great deal", or "pricey".
+        If no comparable listings exist, returns a message explaining that.
+    """
+    listings = load_listings()
+
+    item_category = item.get("category", "").lower()
+    item_styles = {tag.lower() for tag in item.get("style_tags", [])}
+    item_colors = {color.lower() for color in item.get("colors", [])}
+    item_price = item.get("price", 0.0)
+
+    comparable = []
+    for listing in listings:
+        if listing.get("id") == item.get("id"):
+            continue
+        if listing.get("category", "").lower() != item_category:
+            continue
+
+        listing_styles = {tag.lower() for tag in listing.get("style_tags", [])}
+        listing_colors = {color.lower() for color in listing.get("colors", [])}
+
+        if item_styles & listing_styles or item_colors & listing_colors:
+            comparable.append(listing)
+
+    if not comparable:
+        return "No comparable listings found in the dataset — can't judge this price."
+
+    prices = [c["price"] for c in comparable]
+    avg_price = mean(prices)
+    min_price = min(prices)
+    max_price = max(prices)
+
+    if item_price < avg_price * 0.8:
+        verdict = "great deal"
+    elif item_price > avg_price * 1.2:
+        verdict = "pricey"
+    else:
+        verdict = "fair price"
+
+    return (
+        f"${item_price:.2f} is a {verdict}. Comparable {item_category} range from "
+        f"${min_price:.2f} to ${max_price:.2f}, averaging ${avg_price:.2f}."
+    )
+
+
+# ── Stretch Tool 2: check_trends ──────────────────────────────────────────────
+
+def check_trends(style: str, size: str | None = None) -> str:
+    """
+    Check what's currently being discussed for a given style on public fashion
+    subreddits. Uses Reddit's public JSON API (no API key required).
+
+    Args:
+        style: A style keyword such as "vintage", "y2k", or "streetwear".
+        size: Optional size string to include in the search context.
+
+    Returns:
+        A short summary of recent posts related to the style. If the fetch
+        fails or no relevant posts are found, returns a graceful fallback message.
+    """
+    subreddits = ["fashion", "streetwear", "thriftstorehauls"]
+    style_lower = style.lower()
+    size_lower = size.lower() if size else None
+
+    matched_titles = []
+
+    try:
+        for subreddit in subreddits:
+            url = f"https://www.reddit.com/r/{subreddit}/hot.json?limit=25"
+            headers = {"User-Agent": "FitFindrTrendBot/1.0"}
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            for post in data.get("data", {}).get("children", []):
+                title = post.get("data", {}).get("title", "").lower()
+                if style_lower in title:
+                    if size_lower is None or size_lower in title:
+                        matched_titles.append(post["data"]["title"])
+    except Exception:
+        return "Couldn't fetch trend data right now, but this style is always worth exploring."
+
+    if not matched_titles:
+        return f"No recent Reddit posts specifically mentioning '{style}' right now — you're ahead of the curve."
+
+    summary = "; ".join(matched_titles[:5])
+    size_note = f" in size {size}" if size else ""
+    return (
+        f"Recent Reddit buzz around '{style}'{size_note}: {summary}. "
+        f"These posts suggest the style is currently active in fashion communities."
+    )

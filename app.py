@@ -72,6 +72,14 @@ def handle_query(user_query: str, wardrobe_choice: str) -> tuple[str, str, str]:
         f"{item['description']}"
     )
 
+    # Stretch feature notes
+    if session.get("retry_note"):
+        listing_text += f"\n\n🔎 {session['retry_note']}"
+    if session.get("price_comparison"):
+        listing_text += f"\n💰 {session['price_comparison']}"
+    if session.get("trend_note"):
+        listing_text += f"\n📈 {session['trend_note']}"
+
     return listing_text, session["outfit_suggestion"], session["fit_card"]
 
 

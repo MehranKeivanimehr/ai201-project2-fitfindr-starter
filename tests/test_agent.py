@@ -46,3 +46,15 @@ def test_run_agent_parses_size():
     assert session["error"] is None
     assert session["parsed"]["size"] == "M"
     assert "track jacket" in session["parsed"]["description"].lower()
+
+
+def test_run_agent_retry_with_looser_constraints():
+    """A query with an impossible size should still find results after retry."""
+    session = run_agent(
+        query="vintage graphic tee size XXS under $30",
+        wardrobe=get_example_wardrobe(),
+    )
+    assert session["error"] is None
+    assert session["selected_item"] is not None
+    assert session["retry_note"] is not None
+    assert "XXS" in session["retry_note"]

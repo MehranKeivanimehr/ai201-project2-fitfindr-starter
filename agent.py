@@ -20,7 +20,8 @@ Usage (once implemented):
 
 import re
 
-from tools import search_listings, suggest_outfit, create_fit_card
+from tools import search_listings, suggest_outfit, create_fit_card, compare_price, check_trends
+from utils.style_profile import load_style_profile, save_style_profile, update_style_profile
 
 
 # ── session state ─────────────────────────────────────────────────────────────
@@ -43,60 +44,55 @@ def _new_session(query: str, wardrobe: dict) -> dict:
         "wardrobe": wardrobe,        # user's wardrobe dict
         "outfit_suggestion": None,   # string returned by suggest_outfit
         "fit_card": None,            # string returned by create_fit_card
+        "price_comparison": None,    # string from compare_price
+        "trend_note": None,          # string from check_trends
+        "retry_note": None,          # note about loosened search constraints
+        "style_profile": None,       # loaded user style profile
         "error": None,               # set if the interaction ended early
     }
 
 
 # ── planning loop ─────────────────────────────────────────────────────────────
 
-def run_agent(query: str, wardrobe: dict) -> dict:
+def _search_with_retry(description, size, max_price):
     """
-    Main agent entry point. Runs the FitFindr planning loop for a single
-    user interaction and returns the completed session dict.
+    Try searching with the original constraints, then loosen them if no results.
 
-    Args:
-        query:    Natural language user request
-                  (e.g., "vintage graphic tee under $30, size M")
-        wardrobe: User's wardrobe dict — use get_example_wardrobe() or
-                  get_empty_wardrobe() from utils/data_loader.py
-
-    Returns:
-        The session dict after the interaction completes. Check session["error"]
-        first — if it is not None, the interaction ended early and the other
-        output fields (outfit_suggestion, fit_card) will be None.
-
-    TODO — implement this function using the planning loop you designed in planning.md:
-
-        Step 1: Initialize the session with _new_session().
-
-        Step 2: Parse the user's query to extract a description, size, and
-                max_price. You can use regex, string splitting, or ask the LLM
-                to parse it — document your choice in planning.md.
-                Store the result in session["parsed"].
-
-        Step 3: Call search_listings() with the parsed parameters.
-                Store results in session["search_results"].
-                If no results: set session["error"] to a helpful message and
-                return the session early. Do NOT proceed to suggest_outfit
-                with empty input.
-
-        Step 4: Select the item to use (e.g., the top result).
-                Store it in session["selected_item"].
-
-        Step 5: Call suggest_outfit() with the selected item and wardrobe.
-                Store the result in session["outfit_suggestion"].
-
-        Step 6: Call create_fit_card() with the outfit suggestion and selected item.
-                Store the result in session["fit_card"].
-
-        Step 7: Return the session.
-
-    Before writing code, complete the Planning Loop and State Management sections
-    of planning.md — your implementation should match what you described there.
+    Returns a tuple: (results, retry_note). retry_note is None if the first
+    attempt succeeded, otherwise a string explaining what was adjusted.
     """
-    session = _new_session(query, wardrobe)
+    results = search_listings(description=description, size=size, max_price=max_price)
+    if results:
+        return results, None
 
-    # Step 2: Parse the query
+    # Retry 1: remove size filter
+    if size is not None:
+        results = search_listings(description=description, size=None, max_price=max_price)
+        if results:
+            return results, f"No exact matches in size {size}; showing results across all sizes."
+
+    # Retry 2: increase max_price by 50%
+    if max_price is not None:
+        relaxed_price = max_price * 1.5
+        results = search_listings(description=description, size=size, max_price=relaxed_price)
+        if results:
+            return results, f"Nothing under ${max_price:.2f}; expanded budget to ${relaxed_price:.2f}."
+
+    # Retry 3: remove size and increase price
+    if size is not None and max_price is not None:
+        relaxed_price = max_price * 1.5
+        results = search_listings(description=description, size=None, max_price=relaxed_price)
+        if results:
+            return (
+                results,
+                f"No matches in size {size} under ${max_price:.2f}; showing all sizes up to ${relaxed_price:.2f}.",
+            )
+
+    return [], None
+
+
+def _parse_query(query: str) -> dict:
+    """Parse a natural-language query into description, size, and max_price."""
     cleaned_query = query.strip()
 
     # Extract max_price: "under $30", "under 30", "less than $40", "< $50"
@@ -120,42 +116,76 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     # Remaining text is the description
     description = re.sub(r"\s+", " ", cleaned_query).strip(" ,")
 
-    session["parsed"] = {
-        "description": description,
-        "size": size,
-        "max_price": max_price,
-    }
+    return {"description": description, "size": size, "max_price": max_price}
 
-    # Step 3: Search listings
-    session["search_results"] = search_listings(
-        description=description,
-        size=size,
-        max_price=max_price,
+
+def run_agent(query: str, wardrobe: dict) -> dict:
+    """
+    Main agent entry point. Runs the FitFindr planning loop for a single
+    user interaction and returns the completed session dict.
+
+    Args:
+        query:    Natural language user request
+                  (e.g., "vintage graphic tee under $30, size M")
+        wardrobe: User's wardrobe dict — use get_example_wardrobe() or
+                  get_empty_wardrobe() from utils/data_loader.py
+
+    Returns:
+        The session dict after the interaction completes. Check session["error"]
+        first — if it is not None, the interaction ended early and the other
+        output fields (outfit_suggestion, fit_card) will be None.
+    """
+    session = _new_session(query, wardrobe)
+
+    # Load style profile memory
+    profile = load_style_profile()
+    session["style_profile"] = profile
+
+    # Parse the query
+    parsed = _parse_query(query)
+    session["parsed"] = parsed
+
+    # Search with retry logic
+    results, retry_note = _search_with_retry(
+        parsed["description"], parsed["size"], parsed["max_price"]
     )
+    session["search_results"] = results
+    session["retry_note"] = retry_note
 
     if not session["search_results"]:
         session["error"] = (
-            "I couldn't find anything matching that. Try broadening your search — "
-            "remove the size filter, increase the price limit, or use more general keywords."
+            "I couldn't find anything matching that, even with looser constraints. "
+            "Try broadening your search with more general keywords."
         )
         return session
 
-    # Step 4: Select top result
+    # Select top result
     session["selected_item"] = session["search_results"][0]
 
-    # Step 5: Suggest outfit
+    # Stretch: price comparison
+    session["price_comparison"] = compare_price(session["selected_item"])
+
+    # Stretch: trend awareness
+    style_for_trends = session["selected_item"].get("style_tags", ["vintage"])[0]
+    session["trend_note"] = check_trends(style_for_trends, parsed["size"])
+
+    # Suggest outfit
     session["outfit_suggestion"] = suggest_outfit(
         new_item=session["selected_item"],
         wardrobe=session["wardrobe"],
     )
 
-    # Step 6: Create fit card
+    # Create fit card
     session["fit_card"] = create_fit_card(
         outfit=session["outfit_suggestion"],
         new_item=session["selected_item"],
     )
 
-    # Step 7: Return session
+    # Stretch: update style profile memory
+    updated_profile = update_style_profile(profile, query, session["selected_item"])
+    save_style_profile(updated_profile)
+    session["style_profile"] = updated_profile
+
     return session
 
 

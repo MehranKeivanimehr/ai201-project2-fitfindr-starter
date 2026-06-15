@@ -2,7 +2,7 @@
 
 import pytest
 
-from tools import search_listings, suggest_outfit, create_fit_card
+from tools import search_listings, suggest_outfit, create_fit_card, compare_price, check_trends
 from utils.data_loader import get_example_wardrobe, get_empty_wardrobe, load_listings
 
 
@@ -73,4 +73,21 @@ def test_create_fit_card_empty_outfit():
     assert isinstance(caption, str)
     assert "missing" in caption.lower() or "couldn't" in caption.lower()
 
+
+# ── stretch feature tool tests ───────────────────────────────────────────────
+
+
+def test_compare_price_returns_verdict():
+    listings = load_listings()
+    item = listings[0]
+    verdict = compare_price(item)
+    assert isinstance(verdict, str)
+    assert len(verdict.strip()) > 0
+    assert "$" in verdict
+
+
+def test_check_trends_returns_string():
+    note = check_trends("vintage", size=None)
+    assert isinstance(note, str)
+    assert len(note.strip()) > 0
 

@@ -87,9 +87,36 @@ If `outfit` is empty, whitespace-only, or missing, the tool returns a descriptiv
 
 ---
 
-### Additional Tools (if any)
+### Tool 4: compare_price
 
-<!-- Copy the block above for any tools beyond the required three -->
+**What it does:**
+Estimates whether a selected item's price is fair by comparing it to comparable listings in the dataset. Comparable items are in the same category and share at least one style tag or color.
+
+**Input parameters:**
+- `item` (dict, required): The selected listing dict with `category`, `style_tags`, `colors`, and `price`.
+
+**What it returns:**
+A `str` verdict such as "$26.00 is a fair price. Comparable tops range from $15.00 to $28.00, averaging $21.50." If no comparable items exist, returns a message saying so.
+
+**What happens if it fails or returns nothing:**
+If no comparable listings are found, returns: "No comparable listings found in the dataset — can't judge this price." This is not treated as an error; the agent continues normally.
+
+---
+
+### Tool 5: check_trends
+
+**What it does:**
+Checks recent public fashion posts on Reddit for a given style and optional size, returning a short trend summary.
+
+**Input parameters:**
+- `style` (str, required): The style keyword to search for, e.g. `"vintage"` or `"y2k"`.
+- `size` (str | None, optional): Size string to include in the search context.
+
+**What it returns:**
+A `str` summarizing recent Reddit posts related to the style, or a graceful fallback message if the fetch fails.
+
+**What happens if it fails or returns nothing:**
+If the Reddit API is unreachable or no relevant posts are found, returns a fallback message such as "Couldn't fetch trend data right now, but this style is always worth exploring."
 
 ---
 
@@ -101,23 +128,36 @@ The planning loop is implemented in `run_agent(query, wardrobe)` in `agent.py`. 
 
 The exact logic is:
 
-1. **Initialize session.** Call `_new_session(query, wardrobe)` to create a fresh session dict with keys for the query, parsed parameters, search results, selected item, wardrobe, outfit suggestion, fit card, and error.
+1. **Initialize session.** Call `_new_session(query, wardrobe)` to create a fresh session dict.
 
-2. **Parse the query.** Extract three values from the user's natural-language query:
+2. **Load style profile.** Load `data/style_profile.json` via `load_style_profile()` and store it in `session["style_profile"]`. This remembers preferences across sessions.
+
+3. **Parse the query.** Extract three values from the user's natural-language query:
    - `description` (str): the item description
    - `size` (str | None): size if mentioned
    - `max_price` (float | None): price limit if mentioned
    Store these in `session["parsed"]`.
 
-3. **Call `search_listings(description, size, max_price)`.** Store the returned list in `session["search_results"]`.
-   - **Branch A:** If `search_results` is empty, set `session["error"]` to a helpful "no matches" message and return the session immediately. Do not call `suggest_outfit` or `create_fit_card`.
-   - **Branch B:** If `search_results` is not empty, set `session["selected_item"] = search_results[0]` and continue.
+4. **Call `search_listings(description, size, max_price)`.** Store the returned list in `session["search_results"]`.
+   - **Branch A:** If `search_results` is empty, try retry logic:
+     - Remove size filter.
+     - Increase `max_price` by 50%.
+     - Remove size filter and increase price.
+     - If a retry succeeds, store the results and a `retry_note`.
+     - If all retries fail, set `session["error"]` and return early.
+   - **Branch B:** If results exist, set `session["selected_item"] = search_results[0]` and continue.
 
-4. **Call `suggest_outfit(selected_item, wardrobe)`.** Store the returned string in `session["outfit_suggestion"]`.
+5. **Call `compare_price(selected_item)`.** Store the verdict in `session["price_comparison"]`.
 
-5. **Call `create_fit_card(outfit_suggestion, selected_item)`.** Store the returned string in `session["fit_card"]`.
+6. **Call `check_trends(style, size)`.** Store the trend summary in `session["trend_note"]`.
 
-6. **Return the completed session.** The agent is done when either (a) an error is set early, or (b) all three tools have run successfully and the session contains `selected_item`, `outfit_suggestion`, and `fit_card`.
+7. **Call `suggest_outfit(selected_item, wardrobe)`.** Store the returned string in `session["outfit_suggestion"]`.
+
+8. **Call `create_fit_card(outfit_suggestion, selected_item)`.** Store the returned string in `session["fit_card"]`.
+
+9. **Update and save style profile.** Update the profile with the current query and selected item, then save it back to disk.
+
+10. **Return the completed session.**
 
 ---
 
@@ -138,6 +178,10 @@ The session dict tracks:
 | `wardrobe` | user's wardrobe dict | never | Passed into `suggest_outfit` |
 | `outfit_suggestion` | `None` | `suggest_outfit` | The outfit idea returned by the tool |
 | `fit_card` | `None` | `create_fit_card` | The final shareable caption |
+| `price_comparison` | `None` | `compare_price` | Price verdict for the selected item |
+| `trend_note` | `None` | `check_trends` | Recent trend summary from Reddit |
+| `retry_note` | `None` | search retry | Note about any loosened search constraints |
+| `style_profile` | `None` | loaded at start / saved at end | User's remembered style preferences |
 | `error` | `None` | any early failure | Set to a string if the interaction ends early |
 
 Because the same session dict is used throughout `run_agent()`, each tool has access to the results of previous steps. For example, `create_fit_card` receives `outfit_suggestion` and `selected_item` directly from the session values set in earlier steps.
@@ -164,6 +208,11 @@ User query
     ▼
 Planning Loop (run_agent)
     │
+    ├─► Load style profile
+    │       │
+    │       ▼
+    │   Session: style_profile = {...}
+    │       │
     ├─► Parse query
     │       │
     │       ▼
@@ -171,7 +220,11 @@ Planning Loop (run_agent)
     │       │
     ├─► search_listings(description, size, max_price)
     │       │ results = []
-    │       ├──► [ERROR] "I couldn't find anything matching that..."
+    │       ├──► [RETRY] loosen constraints → search again
+    │       │       │
+    │       │       │ results still = []
+    │       │       ▼
+    │       │   [ERROR] "I couldn't find anything matching that..."
     │       │       │
     │       │       ▼
     │       │   Return session early
@@ -180,22 +233,31 @@ Planning Loop (run_agent)
     │       ▼
     │   Session: search_results = results
     │   Session: selected_item = results[0]
+    │   Session: retry_note = "..." (if applicable)
+    │       │
+    ├─► compare_price(selected_item)
+    │   Session: price_comparison = "..."
+    │       │
+    ├─► check_trends(style, size)
+    │   Session: trend_note = "..."
     │       │
     ├─► suggest_outfit(selected_item, wardrobe)
     │       │
     │       ▼
     │   Session: outfit_suggestion = "..."
     │       │
-    └─► create_fit_card(outfit_suggestion, selected_item)
-            │
-            ▼
-        Session: fit_card = "..."
+    ├─► create_fit_card(outfit_suggestion, selected_item)
+    │       │
+    │       ▼
+    │   Session: fit_card = "..."
+    │       │
+    └─► Update & save style profile
             │
             ▼
         Return session
 ```
 
-**How to read the diagram:** The user query enters the Planning Loop. The loop first parses the query, then calls `search_listings`. If that tool returns no results, the error branch triggers and the session is returned early. Otherwise, the top result is stored in the session, and the loop proceeds to `suggest_outfit` and then `create_fit_card`. Each tool reads from and writes to the shared session state, so data flows naturally from one step to the next.
+**How to read the diagram:** The user query enters the Planning Loop. The loop loads the style profile, parses the query, then calls `search_listings`. If no results are found, it retries with loosened constraints before giving up. If a result is found, the loop calls `compare_price`, `check_trends`, `suggest_outfit`, and `create_fit_card`, storing each result in the shared session. Finally, it updates the style profile for future sessions.
 
 ---
 
@@ -214,7 +276,7 @@ Planning Loop (run_agent)
 
 **Milestone 3 — Individual tool implementations:**
 
-- **AI tool:** Kimi Code CLI
+- **AI tool:** Claude Code
 - **Input:** The Tool 1, Tool 2, and Tool 3 sections from `planning.md`, plus the function signatures and docstrings already present in `tools.py`. I will point to the data loader helpers in `utils/data_loader.py` and the Groq client helper in `tools.py`.
 - **Expected output:** Complete implementations of `search_listings()`, `suggest_outfit()`, and `create_fit_card()` in `tools.py`.
 - **Verification:**
@@ -224,7 +286,7 @@ Planning Loop (run_agent)
 
 **Milestone 4 — Planning loop and state management:**
 
-- **AI tool:** Kimi Code CLI
+- **AI tool:** Claude Code
 - **Input:** The Planning Loop, State Management, Error Handling, and Architecture sections from `planning.md`, plus the existing `_new_session()` and `run_agent()` stubs in `agent.py`.
 - **Expected output:** A complete `run_agent()` implementation that follows the branching logic described in the Planning Loop section, and a complete `handle_query()` implementation in `app.py` that maps session results to the three Gradio output panels.
 - **Verification:**

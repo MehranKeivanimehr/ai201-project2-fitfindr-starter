@@ -1,6 +1,6 @@
 # FitFindr 🛍️
 
-FitFindr is a multi-tool AI agent that helps users find secondhand clothing and figure out how to style it with what they already own. Given a natural-language request like "vintage graphic tee under $30, size M," the agent searches a mock dataset of secondhand listings, picks the best match, suggests outfits using the user's wardrobe, and generates a shareable fit card caption.
+FitFindr is a multi-tool AI agent that helps users find secondhand clothing and figure out how to style it with what they already own. Given a natural-language request like "vintage graphic tee under $30, size M," the agent searches a mock dataset of secondhand listings, picks the best match, suggests outfits using the user's wardrobe, generates a shareable fit card caption, and includes stretch features for price comparison, style memory, trend awareness, and search retry logic.
 
 ---
 
@@ -16,7 +16,8 @@ ai201-project2-fitfindr-starter/
 │   ├── test_agent.py          # Tests for the planning loop
 │   └── test_tools.py          # Tests for the three tools
 ├── utils/
-│   └── data_loader.py         # Helper functions for loading data
+│   ├── data_loader.py         # Helper functions for loading data
+│   └── style_profile.py       # Style preference memory across sessions
 ├── agent.py                   # Planning loop and session management
 ├── app.py                     # Gradio web interface
 ├── planning.md                # Design spec for the agent
@@ -78,6 +79,21 @@ Get a free key at [console.groq.com](https://console.groq.com).
   - `outfit` (str, required): the outfit suggestion from `suggest_outfit`.
   - `new_item` (dict, required): the selected listing dict.
 - **Output:** `str` containing a 2–4 sentence caption. Returns a fallback message if the outfit input is empty or the LLM call fails.
+
+### `compare_price(item)` *(stretch)*
+
+- **Purpose:** Estimate whether a selected item's price is fair by comparing it to comparable listings in the dataset.
+- **Inputs:**
+  - `item` (dict, required): the selected listing dict.
+- **Output:** `str` verdict such as "fair price", "great deal", or "pricey", with comparable price range and average.
+
+### `check_trends(style, size=None)` *(stretch)*
+
+- **Purpose:** Check recent public fashion posts on Reddit for a given style and optional size.
+- **Inputs:**
+  - `style` (str, required): the style keyword to search for.
+  - `size` (str | None, optional): size string for additional context.
+- **Output:** `str` summary of recent posts, or a fallback message if the fetch fails.
 
 ---
 
@@ -176,7 +192,7 @@ The final implementation closely matches the spec in `planning.md`. One small ad
 pytest tests/ -v
 ```
 
-Expected: 12 tests pass.
+Expected: 17 tests pass.
 
 ### Run the agent from the command line
 
@@ -206,6 +222,33 @@ Try the no-results example query to see graceful error handling:
 ```text
 designer ballgown size XXS under $5
 ```
+
+---
+
+## Stretch Features
+
+In addition to the three required tools, this implementation includes four stretch features:
+
+### 1. Price comparison
+
+After selecting an item, the agent calls `compare_price()` to judge whether the price is fair against comparable listings in the dataset. The result appears in the listing panel.
+
+### 2. Style profile memory
+
+The agent loads `data/style_profile.json` at the start of each run and updates it after a successful search with the user's query and selected item styles, colors, and sizes. This allows future sessions to remember preferences.
+
+### 3. Trend awareness
+
+The agent calls `check_trends()` to fetch recent fashion-related posts from Reddit for the selected item's style. If Reddit is unreachable, it returns a graceful fallback message instead of crashing.
+
+### 4. Retry logic with fallback
+
+If `search_listings()` returns no results, the agent automatically retries with loosened constraints:
+1. Remove the size filter.
+2. Increase `max_price` by 50%.
+3. Remove size filter and increase price.
+
+If a retry succeeds, a note appears in the listing panel explaining what was adjusted.
 
 ---
 
