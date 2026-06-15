@@ -239,7 +239,7 @@ The agent loads `data/style_profile.json` at the start of each run and updates i
 
 ### 3. Trend awareness
 
-The agent calls `check_trends()` to fetch recent fashion-related posts from Reddit for the selected item's style. If Reddit is unreachable, it returns a graceful fallback message instead of crashing.
+The agent calls `check_trends()` to fetch recent posts from public fashion subreddits (r/fashion, r/streetwear, r/thriftstorehauls) using Reddit's public JSON API. On networks where Reddit allows the request, it returns a short summary of relevant posts. On networks where Reddit blocks automated requests — such as many university networks — it returns a graceful fallback message instead of crashing.
 
 ### 4. Retry logic with fallback
 
